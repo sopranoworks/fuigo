@@ -36,33 +36,38 @@ func (b Builtins) logf(format string, args ...any) {
 	}
 }
 
-// ExecuteSteps runs each step in dir. A step is dispatched by its first token:
-// "go" runs the external go tool; "npmgo" and "esbuild" invoke the built-in
-// libraries. Any other command is rejected. Execution stops at the first
-// failing step, returning an error that names the step.
-func ExecuteSteps(dir string, steps []string, builtins Builtins) error {
+// ExecuteSteps runs each step with root as the module root. A step is
+// dispatched by its first token: "go" runs the external go tool; "npmgo" and
+// "esbuild" invoke the built-in libraries. Any other command is rejected. When
+// a step sets a Workdir it runs in root/Workdir, which must stay within root.
+// Execution stops at the first failing step, returning an error that names it.
+func ExecuteSteps(root string, steps []Step, builtins Builtins) error {
 	for i, step := range steps {
-		args, err := splitArgs(step)
+		args, err := splitArgs(step.Command)
 		if err != nil {
-			return fmt.Errorf("step %d %q: %w", i+1, step, err)
+			return fmt.Errorf("step %d %q: %w", i+1, step.Command, err)
 		}
 		if len(args) == 0 {
 			return fmt.Errorf("step %d is empty", i+1)
 		}
+		stepDir, err := resolveWorkdir(root, step.Workdir)
+		if err != nil {
+			return fmt.Errorf("step %d (%s): %w", i+1, step, err)
+		}
 		builtins.logf("running: %s", step)
 		switch args[0] {
 		case "go":
-			err = runGoStep(dir, args[1:])
+			err = runGoStep(stepDir, args[1:])
 		case "npmgo":
 			if builtins.Npmgo == nil {
 				return fmt.Errorf("step %d: npmgo built-in not available", i+1)
 			}
-			err = builtins.Npmgo(dir, args[1:])
+			err = builtins.Npmgo(stepDir, args[1:])
 		case "esbuild":
 			if builtins.Esbuild == nil {
 				return fmt.Errorf("step %d: esbuild built-in not available", i+1)
 			}
-			err = builtins.Esbuild(dir, args[1:])
+			err = builtins.Esbuild(stepDir, args[1:])
 		default:
 			return fmt.Errorf("step %d: unsupported command %q", i+1, args[0])
 		}
@@ -72,6 +77,23 @@ func ExecuteSteps(dir string, steps []string, builtins Builtins) error {
 		builtins.logf("step %d complete", i+1)
 	}
 	return nil
+}
+
+// resolveWorkdir resolves a step's workdir against the module root, rejecting
+// absolute paths and any path that escapes the root via "..".
+func resolveWorkdir(root, workdir string) (string, error) {
+	if workdir == "" {
+		return root, nil
+	}
+	if filepath.IsAbs(workdir) {
+		return "", fmt.Errorf("workdir %q must be relative to the module root", workdir)
+	}
+	full := filepath.Join(root, filepath.FromSlash(workdir))
+	rel, err := filepath.Rel(root, full)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("workdir %q escapes the module root", workdir)
+	}
+	return full, nil
 }
 
 // runGoStep executes the external go tool in dir, streaming output live.

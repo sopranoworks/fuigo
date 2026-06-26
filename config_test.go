@@ -29,6 +29,36 @@ func TestLoadConfigValid(t *testing.T) {
 	}
 }
 
+func TestLoadConfigMixedStringAndMapSteps(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "fuigo.yaml", ""+
+		"steps:\n"+
+		"  - command: go run .\n"+
+		"    workdir: build/frontend\n"+
+		"  - go generate ./server/...\n")
+	cfg, err := LoadConfig(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Steps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(cfg.Steps))
+	}
+	if cfg.Steps[0].Command != "go run ." || cfg.Steps[0].Workdir != "build/frontend" {
+		t.Errorf("map step parsed wrong: %+v", cfg.Steps[0])
+	}
+	if cfg.Steps[1].Command != "go generate ./server/..." || cfg.Steps[1].Workdir != "" {
+		t.Errorf("string step parsed wrong: %+v", cfg.Steps[1])
+	}
+}
+
+func TestLoadConfigMapStepDisallowedCommand(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "fuigo.yaml", "steps:\n  - command: cd build && go run .\n    workdir: x\n")
+	if _, err := LoadConfig(dir); err == nil {
+		t.Fatal("expected error for disallowed command in map step")
+	}
+}
+
 func TestLoadConfigEmptySteps(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "fuigo.yaml", "steps: []\n")

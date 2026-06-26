@@ -123,7 +123,8 @@ func TestRunYesExecutesSteps(t *testing.T) {
 	zipData := buildModuleZip(t, "github.com/fuigotest/withsteps", "v1.0.0", map[string]string{
 		"go.mod":          "module github.com/fuigotest/withsteps\n\ngo 1.26\n",
 		"cmd/app/main.go": "package main\n\nfunc main() {}\n",
-		"fuigo.yaml":      "steps:\n  - go env GOOS\n",
+		// Mixed string + map(workdir) steps exercised through the full Run path.
+		"fuigo.yaml": "steps:\n  - go env GOOS\n  - command: go env GOARCH\n    workdir: cmd/app\n",
 	})
 	srv := newProxyServer(t, "github.com/fuigotest/withsteps", "v1.0.0", zipData)
 	defer srv.Close()

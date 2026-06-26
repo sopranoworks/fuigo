@@ -11,7 +11,7 @@ import (
 
 // version is the fuigo release, overridable at build time with
 // -ldflags "-X main.version=vX.Y.Z".
-var version = "v0.1.0"
+var version = "v0.1.1"
 
 const usage = `fuigo — go install with pre-build steps
 

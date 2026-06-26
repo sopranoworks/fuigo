@@ -57,6 +57,20 @@ Steps must start with one of three commands:
 gives you npm install + bundling + Go build orchestration. No external commands
 other than `go` are ever executed.
 
+### Running a step in a subdirectory
+
+A step may be written as a map with a `workdir` (relative to the module root)
+instead of a bare string. fuigo runs the command with that directory as its
+working directory — there is no shell, so `cd …&& …` does not work. The workdir
+must stay within the module root.
+
+```yaml
+steps:
+  - command: go run .
+    workdir: build/frontend
+  - go generate ./server/...
+```
+
 ## How it works
 
 1. Resolve the module version and download its source zip from the Go module
