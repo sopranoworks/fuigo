@@ -27,6 +27,8 @@ type Options struct {
 	Yes bool
 	// List prints the pre-build steps without executing anything.
 	List bool
+	// DryRun executes all pre-build steps but skips the final go install.
+	DryRun bool
 
 	// Logf receives progress messages (without a trailing newline). If nil,
 	// messages are discarded.
@@ -50,10 +52,24 @@ func Run(opts Options) error {
 	if opts.Package == "" {
 		return fmt.Errorf("no package specified")
 	}
+	if opts.DryRun {
+		opts.logf("dry run mode (build but do not install)")
+	}
 	if isLocalPath(opts.Package) {
 		return runLocal(opts)
 	}
 	return runRemote(opts)
+}
+
+// skipInstall reports whether the final go install should be skipped because of
+// dry-run mode, logging the dry-run completion messages when it is.
+func skipInstall(opts Options) bool {
+	if !opts.DryRun {
+		return false
+	}
+	opts.logf("skipping go install (dry run)")
+	opts.logf("dry run OK")
+	return true
 }
 
 // runRemote resolves the module from the proxy, runs steps and installs it.
@@ -84,6 +100,9 @@ func runRemote(opts Options) error {
 	if err != nil || !proceed {
 		return err
 	}
+	if skipInstall(opts) {
+		return nil
+	}
 	return install(opts, srcDir, relPkg, path.Base(pkgPath))
 }
 
@@ -110,6 +129,9 @@ func runLocal(opts Options) error {
 	proceed, err := runSteps(opts, dir, cfg)
 	if err != nil || !proceed {
 		return err
+	}
+	if skipInstall(opts) {
+		return nil
 	}
 	for _, rel := range relPkgs {
 		name := path.Base(rel)

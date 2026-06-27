@@ -276,6 +276,82 @@ func TestCheckRemote(t *testing.T) {
 	}
 }
 
+// TestRunDryRunLocal verifies --dry-run runs steps but skips go install.
+func TestRunDryRunLocal(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "go.mod", "module example.com/dry\n\ngo 1.26\n")
+	write(t, dir, "cmd/tool/main.go", "package main\n\nfunc main() {}\n")
+	write(t, dir, "build/gen/main.go", "package main\n\nimport \"os\"\n\nfunc main() { os.WriteFile(\"marker\", []byte(\"ok\"), 0o644) }\n")
+	write(t, dir, "fuigo.yaml", "steps:\n  - command: go run .\n    workdir: build/gen\n")
+
+	bin := t.TempDir()
+	setInstallEnv(t, bin)
+
+	log := &logCapture{}
+	if err := Run(Options{Package: dir, DryRun: true, Yes: true, Logf: log.logf}); err != nil {
+		t.Fatalf("Run --dry-run: %v", err)
+	}
+	if got := readFile(t, filepath.Join(dir, "build", "gen", "marker")); got != "ok" {
+		t.Errorf("step did not execute under --dry-run: %q", got)
+	}
+	if entries, _ := os.ReadDir(bin); len(entries) != 0 {
+		t.Errorf("--dry-run installed a binary: %v", entries)
+	}
+	if !strings.Contains(log.joined(), "skipping go install (dry run)") ||
+		!strings.Contains(log.joined(), "dry run OK") {
+		t.Errorf("missing dry-run messages:\n%s", log.joined())
+	}
+}
+
+// TestRunDryRunStepFailure verifies a failing step under --dry-run reports the
+// error and installs nothing.
+func TestRunDryRunStepFailure(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "go.mod", "module example.com/dryfail\n\ngo 1.26\n")
+	write(t, dir, "cmd/app/main.go", "package main\n\nfunc main() {}\n")
+	write(t, dir, "fuigo.yaml", "steps:\n  - go nonexistent-subcommand-xyz\n")
+
+	bin := t.TempDir()
+	setInstallEnv(t, bin)
+
+	err := Run(Options{Package: dir, DryRun: true, Yes: true})
+	if err == nil {
+		t.Fatal("expected error from failing dry-run step")
+	}
+	if entries, _ := os.ReadDir(bin); len(entries) != 0 {
+		t.Errorf("binary installed despite failed dry-run: %v", entries)
+	}
+}
+
+// TestRunDryRunRemote verifies --dry-run fetches a remote module, runs steps,
+// skips install, and cleans up.
+func TestRunDryRunRemote(t *testing.T) {
+	zipData := buildModuleZip(t, "github.com/fuigotest/dry", "v1.0.0", map[string]string{
+		"go.mod":          "module github.com/fuigotest/dry\n\ngo 1.26\n",
+		"cmd/app/main.go": "package main\n\nfunc main() {}\n",
+		"fuigo.yaml":      "steps:\n  - go env GOOS\n",
+	})
+	srv := newProxyServer(t, "github.com/fuigotest/dry", "v1.0.0", zipData)
+	defer srv.Close()
+	t.Setenv("GOPROXY", srv.URL)
+
+	bin := t.TempDir()
+	setInstallEnv(t, bin)
+
+	log := &logCapture{}
+	err := Run(Options{Package: "github.com/fuigotest/dry/cmd/app@latest", DryRun: true, Yes: true, Logf: log.logf})
+	if err != nil {
+		t.Fatalf("Run --dry-run remote: %v", err)
+	}
+	if !strings.Contains(log.joined(), "step 1 complete") ||
+		!strings.Contains(log.joined(), "dry run OK") {
+		t.Errorf("dry-run remote output unexpected:\n%s", log.joined())
+	}
+	if entries, _ := os.ReadDir(bin); len(entries) != 0 {
+		t.Errorf("--dry-run remote installed a binary: %v", entries)
+	}
+}
+
 func assertBinary(t *testing.T, dir, name string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {

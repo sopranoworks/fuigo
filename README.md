@@ -33,9 +33,24 @@ steps before `go install`. If it does not, fuigo behaves exactly like
 Flags:
 
 - `-t`, `--check` — validate `fuigo.yaml` without executing, then exit
+- `--dry-run` — run the pre-build steps but skip `go install`
 - `--yes` — skip the confirmation prompt (for CI)
 - `--list` — show the steps without executing them
 - `--version` — print the fuigo version
+
+There are three levels of verification, each doing strictly more than the last:
+
+| Command | Validate config | Run steps | `go install` |
+|---|:---:|:---:|:---:|
+| `fuigo -t <target>` | ✓ | ✗ | ✗ |
+| `fuigo --dry-run <target>` | ✓ | ✓ | ✗ |
+| `fuigo <target>` | ✓ | ✓ | ✓ |
+
+`--dry-run` runs every pre-build step (npmgo download, esbuild bundle, `go
+generate`, …) and then stops before installing — confirming that the
+repository state produces a clean build without writing a binary. It works on
+both local and remote targets, and still prompts for confirmation unless
+`--yes` is given.
 
 ### Local directory install
 

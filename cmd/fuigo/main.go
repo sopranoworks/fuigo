@@ -11,7 +11,7 @@ import (
 
 // version is the fuigo release, overridable at build time with
 // -ldflags "-X main.version=vX.Y.Z".
-var version = "v0.2.0"
+var version = "v0.2.1"
 
 const usage = `fuigo — go install with pre-build steps
 
@@ -22,6 +22,7 @@ Usage:
 
 Flags:
   -t, --check   Validate fuigo.yaml without executing, then exit
+  --dry-run     Run pre-build steps but skip go install
   --yes         Skip the confirmation prompt before running steps
   --list        Show the pre-build steps without executing them
   --version     Print the fuigo version and exit
@@ -32,6 +33,7 @@ Examples:
   fuigo .                       # install from the current directory
   fuigo . ./cmd/shoka           # install a specific local package
   fuigo -t .                    # validate the local fuigo.yaml
+  fuigo --dry-run .             # build but do not install
 `
 
 func main() {
@@ -47,6 +49,8 @@ func main() {
 		switch arg {
 		case "-t", "--check":
 			check = true
+		case "--dry-run", "-n":
+			opts.DryRun = true
 		case "--yes", "-y":
 			opts.Yes = true
 		case "--list", "-l":

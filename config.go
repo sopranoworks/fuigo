@@ -55,7 +55,7 @@ func (s *Step) UnmarshalYAML(value *yaml.Node) error {
 // String renders a step for display, noting the workdir when present.
 func (s Step) String() string {
 	if s.Workdir != "" {
-		return fmt.Sprintf("%s (in %s)", s.Command, s.Workdir)
+		return fmt.Sprintf("%s (workdir: %s)", s.Command, s.Workdir)
 	}
 	return s.Command
 }
