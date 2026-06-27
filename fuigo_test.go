@@ -148,6 +148,134 @@ func TestRunYesExecutesSteps(t *testing.T) {
 	assertBinary(t, bin, "app")
 }
 
+func TestIsLocalPath(t *testing.T) {
+	cases := map[string]bool{
+		".":                    true,
+		"..":                   true,
+		"./x":                  true,
+		"../x":                 true,
+		"/abs/path":            true,
+		"mymod":                true,
+		"cmd/foo":              true,
+		"github.com/x/y":       false,
+		"example.com/m@v1.0.0": false,
+		"":                     false,
+	}
+	for in, want := range cases {
+		if got := isLocalPath(in); got != want {
+			t.Errorf("isLocalPath(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestDetectCmdPackages(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "cmd/a/main.go", "package main\nfunc main() {}\n")
+	write(t, dir, "cmd/b/main.go", "package main\nfunc main() {}\n")
+	write(t, dir, "cmd/lib/helper.go", "package lib\n") // no main.go → skipped
+	got := detectCmdPackages(dir)
+	if strings.Join(got, ",") != "cmd/a,cmd/b" {
+		t.Errorf("detectCmdPackages = %v, want [cmd/a cmd/b]", got)
+	}
+}
+
+// TestRunLocalAutoDetectAndWorkdir installs from a local dir, auto-detecting
+// cmd/* and running a workdir step resolved against the local path.
+func TestRunLocalAutoDetectAndWorkdir(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "go.mod", "module example.com/local\n\ngo 1.26\n")
+	write(t, dir, "cmd/tool/main.go", "package main\n\nfunc main() {}\n")
+	write(t, dir, "build/gen/main.go", "package main\n\nimport \"os\"\n\nfunc main() { os.WriteFile(\"marker\", []byte(\"ok\"), 0o644) }\n")
+	write(t, dir, "fuigo.yaml", "steps:\n  - command: go run .\n    workdir: build/gen\n")
+
+	bin := t.TempDir()
+	setInstallEnv(t, bin)
+
+	log := &logCapture{}
+	if err := Run(Options{Package: dir, Yes: true, Logf: log.logf}); err != nil {
+		t.Fatalf("Run local: %v", err)
+	}
+	if got := readFile(t, filepath.Join(dir, "build", "gen", "marker")); got != "ok" {
+		t.Errorf("workdir step did not run in build/gen: %q", got)
+	}
+	assertBinary(t, bin, "tool")
+}
+
+// TestRunLocalExplicitPackage installs a single explicitly-named local package
+// (and only that one) from a module with two commands, no fuigo.yaml.
+func TestRunLocalExplicitPackage(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "go.mod", "module example.com/multi\n\ngo 1.26\n")
+	write(t, dir, "cmd/a/main.go", "package main\n\nfunc main() {}\n")
+	write(t, dir, "cmd/b/main.go", "package main\n\nfunc main() {}\n")
+
+	bin := t.TempDir()
+	setInstallEnv(t, bin)
+
+	if err := Run(Options{Package: dir, Subpkg: "./cmd/b", Yes: true}); err != nil {
+		t.Fatalf("Run local explicit: %v", err)
+	}
+	assertBinary(t, bin, "b")
+	if _, err := os.Stat(filepath.Join(bin, "a")); err == nil {
+		t.Error("cmd/a was installed but only ./cmd/b was requested")
+	}
+}
+
+func TestCheckLocalValid(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "fuigo.yaml", "steps:\n  - go generate ./...\n  - npmgo install\n")
+	log := &logCapture{}
+	if err := Check(Options{Package: dir, Logf: log.logf}); err != nil {
+		t.Fatalf("Check valid: %v", err)
+	}
+	if !strings.Contains(log.joined(), "syntax OK (2 steps)") {
+		t.Errorf("unexpected output: %s", log.joined())
+	}
+}
+
+func TestCheckLocalInvalid(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "fuigo.yaml", "steps:\n  - npm install\n")
+	log := &logCapture{}
+	err := Check(Options{Package: dir, Logf: log.logf})
+	if err == nil {
+		t.Fatal("expected Check to fail on invalid config")
+	}
+	if !strings.Contains(log.joined(), "fuigo.yaml error:") {
+		t.Errorf("error not reported: %s", log.joined())
+	}
+}
+
+func TestCheckLocalNoConfig(t *testing.T) {
+	log := &logCapture{}
+	if err := Check(Options{Package: t.TempDir(), Logf: log.logf}); err != nil {
+		t.Fatalf("Check no-config should not error: %v", err)
+	}
+	if !strings.Contains(log.joined(), "no fuigo.yaml found") {
+		t.Errorf("unexpected output: %s", log.joined())
+	}
+}
+
+// TestCheckRemote fetches a module from the (offline) proxy, validates its
+// fuigo.yaml, and cleans up — without executing or installing.
+func TestCheckRemote(t *testing.T) {
+	zipData := buildModuleZip(t, "github.com/fuigotest/chk", "v1.0.0", map[string]string{
+		"go.mod":     "module github.com/fuigotest/chk\n\ngo 1.26\n",
+		"fuigo.yaml": "steps:\n  - go generate ./...\n",
+	})
+	srv := newProxyServer(t, "github.com/fuigotest/chk", "v1.0.0", zipData)
+	defer srv.Close()
+	t.Setenv("GOPROXY", srv.URL)
+
+	log := &logCapture{}
+	if err := Check(Options{Package: "github.com/fuigotest/chk/cmd/chk@latest", Logf: log.logf}); err != nil {
+		t.Fatalf("Check remote: %v", err)
+	}
+	if !strings.Contains(log.joined(), "syntax OK (1 steps)") {
+		t.Errorf("unexpected output: %s", log.joined())
+	}
+}
+
 func assertBinary(t *testing.T, dir, name string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {

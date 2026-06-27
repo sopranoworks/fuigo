@@ -32,9 +32,45 @@ steps before `go install`. If it does not, fuigo behaves exactly like
 
 Flags:
 
+- `-t`, `--check` — validate `fuigo.yaml` without executing, then exit
 - `--yes` — skip the confirmation prompt (for CI)
 - `--list` — show the steps without executing them
 - `--version` — print the fuigo version
+
+### Local directory install
+
+fuigo can install from a local directory instead of fetching from the module
+proxy — handy during development. A target is treated as local when it starts
+with `.`, `..`, or `/`, or when its first path segment has no dot (i.e. it is
+not a `host.tld/...` module path).
+
+```sh
+fuigo .                  # install from the current directory (auto-detects ./cmd/*)
+fuigo ./path/to/module   # install from a relative path
+fuigo . ./cmd/shoka      # install a specific package
+```
+
+With no explicit package, fuigo installs every `./cmd/*` package that has a
+`main.go`. Steps (including their `workdir`) resolve against the local path.
+
+### Validate without running: `-t`
+
+Like `httpd -t`, `fuigo -t` checks a `fuigo.yaml` and reports every problem
+without executing anything. It works on local paths and remote modules (the
+module is fetched, validated, and cleaned up).
+
+```sh
+fuigo -t .                                         # validate the local config
+fuigo -t github.com/sopranoworks/shoka/cmd/shoka@latest
+```
+
+```
+fuigo: fuigo.yaml syntax OK (2 steps)
+fuigo: fuigo.yaml error: step 2: command "npm install" not allowed (must start with go/npmgo/esbuild)
+```
+
+A missing `fuigo.yaml` is reported, not an error (fuigo falls back to plain
+`go install`).
 
 ## fuigo.yaml
 

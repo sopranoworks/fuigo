@@ -3,6 +3,7 @@ package fuigo
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -72,6 +73,46 @@ func TestLoadConfigDisallowedCommand(t *testing.T) {
 	write(t, dir, "fuigo.yaml", "steps:\n  - rm -rf /\n")
 	if _, err := LoadConfig(dir); err == nil {
 		t.Fatal("expected error for disallowed command")
+	}
+}
+
+func TestValidateConfigOK(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "fuigo.yaml", "steps:\n  - go generate ./...\n  - command: go run .\n    workdir: build/frontend\n")
+	found, steps, problems := ValidateConfig(dir)
+	if !found || steps != 2 || len(problems) != 0 {
+		t.Fatalf("ValidateConfig = (found=%v, steps=%d, problems=%v)", found, steps, problems)
+	}
+}
+
+func TestValidateConfigNoFile(t *testing.T) {
+	found, steps, problems := ValidateConfig(t.TempDir())
+	if found || steps != 0 || len(problems) != 0 {
+		t.Fatalf("expected (false,0,nil), got (%v,%d,%v)", found, steps, problems)
+	}
+}
+
+func TestValidateConfigCollectsAllErrors(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "fuigo.yaml", "steps:\n  - npm install\n  - command: go run .\n    workdir: ../escape\n")
+	found, _, problems := ValidateConfig(dir)
+	if !found || len(problems) != 2 {
+		t.Fatalf("expected 2 problems, got %v", problems)
+	}
+	if !strings.Contains(problems[0], "step 1") || !strings.Contains(problems[0], "not allowed") {
+		t.Errorf("problem 0 = %q", problems[0])
+	}
+	if !strings.Contains(problems[1], "step 2") || !strings.Contains(problems[1], "escapes") {
+		t.Errorf("problem 1 = %q", problems[1])
+	}
+}
+
+func TestValidateConfigEmptySteps(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "fuigo.yaml", "steps: []\n")
+	_, _, problems := ValidateConfig(dir)
+	if len(problems) == 0 {
+		t.Fatal("expected a problem for empty steps")
 	}
 }
 

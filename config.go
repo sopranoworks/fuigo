@@ -94,6 +94,47 @@ func LoadConfig(dir string) (*Config, error) {
 	return &cfg, nil
 }
 
+// ValidateConfig checks the fuigo.yaml in dir without executing anything. It
+// reports whether a config is present, the step count, and every problem found
+// (not just the first). A missing fuigo.yaml is reported as found=false with no
+// problems — that is a valid state (plain go install).
+func ValidateConfig(dir string) (found bool, steps int, problems []string) {
+	path := filepath.Join(dir, ConfigFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, 0, nil
+		}
+		return true, 0, []string{fmt.Sprintf("reading %s: %v", ConfigFile, err)}
+	}
+
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return true, 0, []string{fmt.Sprintf("invalid YAML: %v", err)}
+	}
+	if len(cfg.Steps) == 0 {
+		return true, 0, []string{"steps must not be empty"}
+	}
+
+	for i, step := range cfg.Steps {
+		n := i + 1
+		if strings.TrimSpace(step.Command) == "" {
+			problems = append(problems, fmt.Sprintf("step %d: empty command", n))
+			continue
+		}
+		if !isAllowedCommand(step.Command) {
+			problems = append(problems, fmt.Sprintf(
+				"step %d: command %q not allowed (must start with go/npmgo/esbuild)", n, step.Command))
+		}
+		if step.Workdir != "" {
+			if err := validateWorkdir(step.Workdir); err != nil {
+				problems = append(problems, fmt.Sprintf("step %d: %v", n, err))
+			}
+		}
+	}
+	return true, len(cfg.Steps), problems
+}
+
 // isAllowedCommand reports whether command's first token is an allowed command.
 func isAllowedCommand(command string) bool {
 	fields := strings.Fields(command)

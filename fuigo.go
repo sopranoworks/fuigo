@@ -8,15 +8,21 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 )
 
-// Options configures a Run.
+// Options configures a Run or Check.
 type Options struct {
-	// Package is the target package path, optionally with an "@version" suffix
-	// (e.g. "github.com/sopranoworks/shoka/cmd/shoka@latest").
+	// Package is the target: a remote module path (optionally with an
+	// "@version" suffix, e.g. "github.com/sopranoworks/shoka/cmd/shoka@latest")
+	// or a local directory (".", "./path", "/abs/path").
 	Package string
+	// Subpkg optionally names the package to install for a local target, e.g.
+	// "./cmd/shoka". When empty, local installs auto-detect ./cmd/*.
+	Subpkg string
 	// Yes skips the confirmation prompt before executing steps.
 	Yes bool
 	// List prints the pre-build steps without executing anything.
@@ -37,23 +43,31 @@ func (o Options) logf(format string, args ...any) {
 	}
 }
 
-// Run resolves the target module, runs any pre-build steps and installs the
-// package. It is the entry point used by the CLI.
+// Run runs any pre-build steps for the target and installs it. The target is
+// either a remote module (fetched from the proxy) or a local directory. It is
+// the entry point used by the CLI.
 func Run(opts Options) error {
-	pkgPath, version := splitVersion(opts.Package)
-	if pkgPath == "" {
+	if opts.Package == "" {
 		return fmt.Errorf("no package specified")
 	}
+	if isLocalPath(opts.Package) {
+		return runLocal(opts)
+	}
+	return runRemote(opts)
+}
+
+// runRemote resolves the module from the proxy, runs steps and installs it.
+func runRemote(opts Options) error {
+	pkgPath, version := splitVersion(opts.Package)
 	module, relPkg := SplitModulePath(pkgPath)
 
 	displayVersion := version
 	if displayVersion == "" {
 		displayVersion = "latest"
 	}
-
 	opts.logf("resolving %s@%s...", module, displayVersion)
 	opts.logf("downloading module zip...")
-	srcDir, resolved, cleanup, err := ResolveModule(pkgPath, version)
+	srcDir, _, cleanup, err := ResolveModule(pkgPath, version)
 	if err != nil {
 		return err
 	}
@@ -61,67 +75,203 @@ func Run(opts Options) error {
 		cleanup()
 		opts.logf("cleaned up %s", srcDir)
 	}()
-	if resolved != "" {
-		displayVersion = resolved
-	}
 
 	cfg, err := LoadConfig(srcDir)
 	if err != nil {
 		return err
 	}
+	proceed, err := runSteps(opts, srcDir, cfg)
+	if err != nil || !proceed {
+		return err
+	}
+	return install(opts, srcDir, relPkg, path.Base(pkgPath))
+}
 
-	if cfg == nil {
-		opts.logf("no fuigo.yaml found, running plain go install")
-		if opts.List {
-			return nil
-		}
-		return install(opts, srcDir, relPkg, pkgPath)
+// runLocal runs steps and installs from a local directory, with no download.
+func runLocal(opts Options) error {
+	dir, err := filepath.Abs(opts.Package)
+	if err != nil {
+		return err
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return fmt.Errorf("%s: not a directory", opts.Package)
+	}
+	opts.logf("installing from local directory %s", dir)
+
+	relPkgs, err := localPackages(opts, dir)
+	if err != nil {
+		return err
 	}
 
+	cfg, err := LoadConfig(dir)
+	if err != nil {
+		return err
+	}
+	proceed, err := runSteps(opts, dir, cfg)
+	if err != nil || !proceed {
+		return err
+	}
+	for _, rel := range relPkgs {
+		name := path.Base(rel)
+		if rel == "" {
+			name = path.Base(dir)
+		}
+		if err := install(opts, dir, rel, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Check validates the target's fuigo.yaml without executing anything. For a
+// remote target it fetches the module zip, validates, and cleans up. It returns
+// a non-nil error when validation fails (problems are reported via Logf).
+func Check(opts Options) error {
+	if opts.Package == "" {
+		return fmt.Errorf("no target specified")
+	}
+	var dir string
+	if isLocalPath(opts.Package) {
+		abs, err := filepath.Abs(opts.Package)
+		if err != nil {
+			opts.logf("error: %v", err)
+			return err
+		}
+		if fi, err := os.Stat(abs); err != nil || !fi.IsDir() {
+			opts.logf("error: %s is not a directory", opts.Package)
+			return fmt.Errorf("%s: not a directory", opts.Package)
+		}
+		dir = abs
+	} else {
+		pkgPath, version := splitVersion(opts.Package)
+		srcDir, _, cleanup, err := ResolveModule(pkgPath, version)
+		if err != nil {
+			opts.logf("error: %v", err)
+			return err
+		}
+		defer cleanup()
+		dir = srcDir
+	}
+
+	found, steps, problems := ValidateConfig(dir)
+	if !found {
+		opts.logf("no fuigo.yaml found (plain go install, no pre-build steps)")
+		return nil
+	}
+	if len(problems) > 0 {
+		for _, p := range problems {
+			opts.logf("fuigo.yaml error: %s", p)
+		}
+		return fmt.Errorf("%d validation error(s)", len(problems))
+	}
+	opts.logf("fuigo.yaml syntax OK (%d steps)", steps)
+	return nil
+}
+
+// runSteps lists the steps and, unless --list, confirms and executes them in
+// root. It returns proceed=false when --list short-circuits before install.
+func runSteps(opts Options, root string, cfg *Config) (proceed bool, err error) {
+	if cfg == nil {
+		opts.logf("no fuigo.yaml found, running plain go install")
+		return !opts.List, nil
+	}
 	opts.logf("fuigo.yaml found, pre-build steps:")
 	for i, step := range cfg.Steps {
 		opts.logf("  %d. %s", i+1, step)
 	}
-
 	if opts.List {
-		return nil
+		return false, nil
 	}
-
 	if !opts.Yes {
 		ok, err := confirm(opts)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if !ok {
-			return fmt.Errorf("aborted by user")
+			return false, fmt.Errorf("aborted by user")
 		}
 	}
-
 	builtins := DefaultBuiltins(opts.Logf)
-	if err := ExecuteSteps(srcDir, cfg.Steps, builtins); err != nil {
-		return err
+	if err := ExecuteSteps(root, cfg.Steps, builtins); err != nil {
+		return false, err
 	}
-
-	return install(opts, srcDir, relPkg, pkgPath)
+	return true, nil
 }
 
-// install delegates to go install and reports where the binary landed.
-func install(opts Options, srcDir, relPkg, pkgPath string) error {
-	rel := relPkg
-	if rel == "" {
-		rel = "."
+// install delegates to go install and reports where the binary landed. binName
+// is the expected binary name, used only for the progress message.
+func install(opts Options, srcDir, relPkg, binName string) error {
+	target := "."
+	if relPkg != "" {
+		target = "./" + relPkg
 	}
-	opts.logf("running: go install ./%s", strings.TrimPrefix(rel, "./"))
+	opts.logf("running: go install %s", target)
 	if err := Install(srcDir, relPkg); err != nil {
 		return err
 	}
-	bin := path.Base(pkgPath)
 	if dir := InstallDir(); dir != "" {
-		opts.logf("installed to %s/%s", dir, bin)
+		opts.logf("installed to %s/%s", dir, binName)
 	} else {
-		opts.logf("installed %s", bin)
+		opts.logf("installed %s", binName)
 	}
 	return nil
+}
+
+// localPackages determines which package(s) to install from a local directory:
+// the explicit Subpkg if given, otherwise auto-detected ./cmd/* packages, or
+// the module root as a last resort.
+func localPackages(opts Options, dir string) ([]string, error) {
+	if opts.Subpkg != "" {
+		rel, err := cleanRelPkg(opts.Subpkg)
+		if err != nil {
+			return nil, err
+		}
+		return []string{rel}, nil
+	}
+	if detected := detectCmdPackages(dir); len(detected) > 0 {
+		return detected, nil
+	}
+	return []string{""}, nil
+}
+
+// detectCmdPackages returns the "cmd/<name>" packages under dir that contain a
+// main.go, sorted for deterministic order.
+func detectCmdPackages(dir string) []string {
+	entries, err := os.ReadDir(filepath.Join(dir, "cmd"))
+	if err != nil {
+		return nil
+	}
+	var pkgs []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dir, "cmd", e.Name(), "main.go")); err == nil {
+			pkgs = append(pkgs, "cmd/"+e.Name())
+		}
+	}
+	return pkgs
+}
+
+// isLocalPath reports whether target names a local directory rather than a
+// remote module path. Local: ".", "..", a "./"/"../"/"/"-prefixed path, or a
+// path whose first segment has no dot (module paths start with a dotted host
+// like github.com).
+func isLocalPath(target string) bool {
+	switch {
+	case target == "", target == ".", target == "..":
+		return target != ""
+	case strings.HasPrefix(target, "./"), strings.HasPrefix(target, "../"), strings.HasPrefix(target, "/"):
+		return true
+	}
+	first := target
+	if i := strings.IndexByte(first, '/'); i >= 0 {
+		first = first[:i]
+	}
+	if i := strings.IndexByte(first, '@'); i >= 0 {
+		first = first[:i]
+	}
+	return !strings.Contains(first, ".")
 }
 
 // confirm prompts on opts.Out and reads a yes/no answer from opts.In. The

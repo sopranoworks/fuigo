@@ -85,15 +85,23 @@ func resolveWorkdir(root, workdir string) (string, error) {
 	if workdir == "" {
 		return root, nil
 	}
+	if err := validateWorkdir(workdir); err != nil {
+		return "", err
+	}
+	return filepath.Join(root, filepath.FromSlash(workdir)), nil
+}
+
+// validateWorkdir checks a step workdir without resolving it: it must be
+// relative and must not escape the module root via "..".
+func validateWorkdir(workdir string) error {
 	if filepath.IsAbs(workdir) {
-		return "", fmt.Errorf("workdir %q must be relative to the module root", workdir)
+		return fmt.Errorf("workdir %q must be relative to the module root", workdir)
 	}
-	full := filepath.Join(root, filepath.FromSlash(workdir))
-	rel, err := filepath.Rel(root, full)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return "", fmt.Errorf("workdir %q escapes the module root", workdir)
+	clean := filepath.Clean(filepath.FromSlash(workdir))
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
+		return fmt.Errorf("workdir %q escapes the module root", workdir)
 	}
-	return full, nil
+	return nil
 }
 
 // runGoStep executes the external go tool in dir, streaming output live.

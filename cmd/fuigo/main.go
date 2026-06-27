@@ -11,22 +11,27 @@ import (
 
 // version is the fuigo release, overridable at build time with
 // -ldflags "-X main.version=vX.Y.Z".
-var version = "v0.1.1"
+var version = "v0.2.0"
 
 const usage = `fuigo — go install with pre-build steps
 
 Usage:
   fuigo [flags] <package>[@version]
+  fuigo [flags] <local-path> [package]
+  fuigo -t <package|local-path>
 
 Flags:
-  --yes        Skip the confirmation prompt before running steps
-  --list       Show the pre-build steps without executing them
-  --version    Print the fuigo version and exit
-  -h, --help   Show this help
+  -t, --check   Validate fuigo.yaml without executing, then exit
+  --yes         Skip the confirmation prompt before running steps
+  --list        Show the pre-build steps without executing them
+  --version     Print the fuigo version and exit
+  -h, --help    Show this help
 
 Examples:
   fuigo github.com/sopranoworks/shoka/cmd/shoka@latest
-  fuigo --list github.com/sopranoworks/shoka/cmd/shoka@latest
+  fuigo .                       # install from the current directory
+  fuigo . ./cmd/shoka           # install a specific local package
+  fuigo -t .                    # validate the local fuigo.yaml
 `
 
 func main() {
@@ -36,9 +41,12 @@ func main() {
 		Out:  os.Stderr,
 	}
 
-	var pkg string
+	var check bool
+	var positional []string
 	for _, arg := range os.Args[1:] {
 		switch arg {
+		case "-t", "--check":
+			check = true
 		case "--yes", "-y":
 			opts.Yes = true
 		case "--list", "-l":
@@ -54,19 +62,30 @@ func main() {
 				fmt.Fprintf(os.Stderr, "fuigo: unknown flag %q\n", arg)
 				os.Exit(2)
 			}
-			if pkg != "" {
-				fmt.Fprintf(os.Stderr, "fuigo: multiple packages given (%q and %q)\n", pkg, arg)
-				os.Exit(2)
-			}
-			pkg = arg
+			positional = append(positional, arg)
 		}
 	}
 
-	if pkg == "" {
+	if len(positional) == 0 {
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
 	}
-	opts.Package = pkg
+	if len(positional) > 2 {
+		fmt.Fprintf(os.Stderr, "fuigo: too many arguments: %v\n", positional)
+		os.Exit(2)
+	}
+	opts.Package = positional[0]
+	if len(positional) == 2 {
+		opts.Subpkg = positional[1]
+	}
+
+	if check {
+		// Check reports problems via Logf; exit non-zero if validation fails.
+		if err := fuigo.Check(opts); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 
 	if err := fuigo.Run(opts); err != nil {
 		fmt.Fprintf(os.Stderr, "fuigo: error: %v\n", err)
