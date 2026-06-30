@@ -297,9 +297,42 @@ func TestRunDryRunLocal(t *testing.T) {
 	if entries, _ := os.ReadDir(bin); len(entries) != 0 {
 		t.Errorf("--dry-run installed a binary: %v", entries)
 	}
+	if !strings.Contains(log.joined(), "running: go build") {
+		t.Errorf("--dry-run did not run go build:\n%s", log.joined())
+	}
 	if !strings.Contains(log.joined(), "skipping go install (dry run)") ||
 		!strings.Contains(log.joined(), "dry run OK") {
 		t.Errorf("missing dry-run messages:\n%s", log.joined())
+	}
+}
+
+// TestRunDryRunBuildFailure verifies that under --dry-run a package that fails to
+// compile makes the run fail (go build is actually exercised) and installs
+// nothing, even when the pre-build steps themselves succeed.
+func TestRunDryRunBuildFailure(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "go.mod", "module example.com/drybuildfail\n\ngo 1.26\n")
+	// Steps succeed, but the package does not compile (undefined identifier), so
+	// go build must fail the dry run.
+	write(t, dir, "cmd/app/main.go", "package main\n\nfunc main() { doesNotExist() }\n")
+	write(t, dir, "fuigo.yaml", "steps:\n  - go env GOOS\n")
+
+	bin := t.TempDir()
+	setInstallEnv(t, bin)
+
+	log := &logCapture{}
+	err := Run(Options{Package: dir, DryRun: true, Yes: true, Logf: log.logf})
+	if err == nil {
+		t.Fatal("expected error from failing go build under --dry-run")
+	}
+	if !strings.Contains(log.joined(), "step 1 complete") {
+		t.Errorf("pre-build step did not run before build failure:\n%s", log.joined())
+	}
+	if strings.Contains(log.joined(), "dry run OK") {
+		t.Errorf("dry run reported OK despite build failure:\n%s", log.joined())
+	}
+	if entries, _ := os.ReadDir(bin); len(entries) != 0 {
+		t.Errorf("binary installed despite failed build: %v", entries)
 	}
 }
 
@@ -344,6 +377,7 @@ func TestRunDryRunRemote(t *testing.T) {
 		t.Fatalf("Run --dry-run remote: %v", err)
 	}
 	if !strings.Contains(log.joined(), "step 1 complete") ||
+		!strings.Contains(log.joined(), "running: go build") ||
 		!strings.Contains(log.joined(), "dry run OK") {
 		t.Errorf("dry-run remote output unexpected:\n%s", log.joined())
 	}

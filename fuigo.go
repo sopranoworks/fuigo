@@ -61,15 +61,23 @@ func Run(opts Options) error {
 	return runRemote(opts)
 }
 
-// skipInstall reports whether the final go install should be skipped because of
-// dry-run mode, logging the dry-run completion messages when it is.
-func skipInstall(opts Options) bool {
-	if !opts.DryRun {
-		return false
+// dryRunBuild compiles each package (without installing) to verify it builds,
+// then logs the dry-run completion messages. It is used in place of install when
+// opts.DryRun is set: --dry-run runs go build but skips go install.
+func dryRunBuild(opts Options, srcDir string, relPkgs []string) error {
+	for _, rel := range relPkgs {
+		target := "."
+		if rel != "" {
+			target = "./" + rel
+		}
+		opts.logf("running: go build %s", target)
+		if err := Build(srcDir, rel); err != nil {
+			return err
+		}
 	}
 	opts.logf("skipping go install (dry run)")
 	opts.logf("dry run OK")
-	return true
+	return nil
 }
 
 // runRemote resolves the module from the proxy, runs steps and installs it.
@@ -100,8 +108,8 @@ func runRemote(opts Options) error {
 	if err != nil || !proceed {
 		return err
 	}
-	if skipInstall(opts) {
-		return nil
+	if opts.DryRun {
+		return dryRunBuild(opts, srcDir, []string{relPkg})
 	}
 	return install(opts, srcDir, relPkg, path.Base(pkgPath))
 }
@@ -130,8 +138,8 @@ func runLocal(opts Options) error {
 	if err != nil || !proceed {
 		return err
 	}
-	if skipInstall(opts) {
-		return nil
+	if opts.DryRun {
+		return dryRunBuild(opts, dir, relPkgs)
 	}
 	for _, rel := range relPkgs {
 		name := path.Base(rel)

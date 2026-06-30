@@ -30,6 +30,31 @@ func Install(dir, relPkg string) error {
 	return nil
 }
 
+// Build compiles the package at relPkg within the module source rooted at dir
+// without producing a binary (output is discarded via os.DevNull), to verify the
+// code compiles. It is used by dry-run mode in place of go install. relPkg
+// follows the same convention as Install: an empty relPkg builds the module root
+// package. Output is streamed live.
+func Build(dir, relPkg string) error {
+	rel, err := cleanRelPkg(relPkg)
+	if err != nil {
+		return err
+	}
+	target := "./" + rel
+	if rel == "" {
+		target = "."
+	}
+	cmd := exec.Command("go", "build", "-o", os.DevNull, target)
+	cmd.Dir = dir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = os.Environ()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("go build %s: %w", target, err)
+	}
+	return nil
+}
+
 // InstallDir reports the directory go install writes binaries to: GOBIN if set,
 // otherwise GOPATH/bin.
 func InstallDir() string {

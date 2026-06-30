@@ -11,7 +11,7 @@ import (
 
 // version is the fuigo release, overridable at build time with
 // -ldflags "-X main.version=vX.Y.Z".
-var version = "v0.2.1"
+var version = "v0.2.2"
 
 const usage = `fuigo — go install with pre-build steps
 
@@ -22,7 +22,7 @@ Usage:
 
 Flags:
   -t, --check   Validate fuigo.yaml without executing, then exit
-  --dry-run     Run pre-build steps but skip go install
+  --dry-run     Run pre-build steps and go build, but skip go install
   --yes         Skip the confirmation prompt before running steps
   --list        Show the pre-build steps without executing them
   --version     Print the fuigo version and exit
