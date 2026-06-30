@@ -5,7 +5,7 @@ go 1.26
 require (
 	github.com/evanw/esbuild v0.28.1
 	github.com/go-git/go-git/v5 v5.19.1
-	github.com/sopranoworks/npmgo v0.2.0
+	github.com/sopranoworks/npmgo v0.3.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
